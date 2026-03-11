@@ -1,4 +1,5 @@
 import 'dart:typed_data';
+
 import 'package:clip_flow/core/services/ocr_service.dart';
 
 /// 用于测试的模拟OCR服务
@@ -11,6 +12,11 @@ class MockOcrService implements OcrService {
   @override
   List<String> getSupportedLanguages() {
     return ['en', 'zh', 'auto'];
+  }
+
+  @override
+  Future<List<String>> getAvailableLanguages() async {
+    return getSupportedLanguages();
   }
 
   @override

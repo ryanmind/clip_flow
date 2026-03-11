@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
@@ -6,11 +7,83 @@ import 'package:clip_flow/core/models/clip_item.dart';
 import 'package:clip_flow/core/services/async_processing_queue.dart';
 import 'package:clip_flow/core/services/clipboard_poller.dart';
 import 'package:clip_flow/core/services/clipboard/clipboard_manager.dart';
+import 'package:clip_flow/core/services/storage/index.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   // 确保Flutter测试环境初始化
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  const clipboardChannel = MethodChannel('clipboard_service');
+  const pathProviderChannel = MethodChannel('plugins.flutter.io/path_provider');
+  const clipboardEvents = EventChannel('clipboard_events');
+  final tempRoot = Directory.systemTemp.createTempSync('clip_flow_perf_test_');
+
+  late MockStreamHandlerEventSink eventSink;
+  late bool shouldFailStream;
+  late int mockSequence;
+
+  Future<void> emitNativeEvent(int sequence, {int intervalMs = 0}) async {
+    eventSink.success(<String, Object?>{
+      'sequence': sequence,
+      'timestamp': DateTime.now().millisecondsSinceEpoch,
+      'platform': 'macos',
+      'source': 'owner-change',
+      'monitoringIntervalMs': intervalMs,
+    });
+    await Future<void>.delayed(Duration.zero);
+  }
+
+  setUpAll(() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(clipboardChannel, (call) async {
+          if (call.method == 'getClipboardSequence') {
+            return mockSequence;
+          }
+          return null;
+        });
+
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(pathProviderChannel, (call) async {
+          switch (call.method) {
+            case 'getApplicationSupportDirectory':
+            case 'getApplicationDocumentsDirectory':
+            case 'getTemporaryDirectory':
+              return tempRoot.path;
+            default:
+              return tempRoot.path;
+          }
+        });
+
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockStreamHandler(
+          clipboardEvents,
+          MockStreamHandler.inline(
+            onListen: (arguments, events) {
+              if (shouldFailStream) {
+                events.error(code: 'STREAM_ERROR', message: 'stream failed');
+                return;
+              }
+              eventSink = events;
+            },
+          ),
+        );
+  });
+
+  tearDownAll(() async {
+    await DatabaseService.instance.close();
+    PathService.instance.clearCache();
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(clipboardChannel, null);
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(pathProviderChannel, null);
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockStreamHandler(clipboardEvents, null);
+    if (tempRoot.existsSync()) {
+      tempRoot.deleteSync(recursive: true);
+    }
+  });
 
   group('剪贴板性能优化测试', () {
     late ClipboardManager manager;
@@ -18,24 +91,33 @@ void main() {
     late AsyncProcessingQueue queue;
 
     setUp(() async {
-      manager = ClipboardManager();
+      shouldFailStream = false;
+      mockSequence = 0;
+      PathService.instance.clearCache();
+      manager = ClipboardManager.test(
+        batchInsertOverride: (_) async {},
+        skipStorageInitialization: true,
+      );
       poller = ClipboardPoller();
       queue = AsyncProcessingQueue();
     });
 
     tearDown(() async {
       await manager.dispose();
+      await DatabaseService.instance.close();
+      PathService.instance.clearCache();
       poller.stopPolling();
       queue.stop();
     });
 
     test('快速复制模式检测测试', () async {
       poller.startPolling();
+      await Future<void>.delayed(Duration.zero);
 
       // 模拟快速复制
-      for (int i = 0; i < 5; i++) {
+      for (int i = 1; i <= 5; i++) {
         await Future.delayed(Duration(milliseconds: 200));
-        poller.checkOnce();
+        await emitNativeEvent(i);
       }
 
       // 检查是否进入快速复制模式
@@ -43,7 +125,8 @@ void main() {
       print('轮询统计: $stats');
 
       expect(stats['isRapidCopyMode'], isTrue);
-      expect(stats['rapidCopyCount'], greaterThan(0));
+      expect(stats['rapidCopyCount'], greaterThanOrEqualTo(3));
+      expect(stats['totalNativeEvents'], equals(5));
     });
 
     test('异步处理队列性能测试', () async {
@@ -134,34 +217,34 @@ void main() {
 
     test('轮询间隔自适应测试', () async {
       poller.startPolling();
+      await Future<void>.delayed(Duration.zero);
 
       final initialInterval = poller.currentInterval;
       print('初始轮询间隔: ${initialInterval.inMilliseconds}ms');
 
-      // 模拟连续变化
-      for (int i = 0; i < 10; i++) {
-        await Future.delayed(Duration(milliseconds: 300));
-        await poller.checkOnce();
+      for (int i = 1; i <= 3; i++) {
+        await emitNativeEvent(i);
       }
 
       final activeInterval = poller.currentInterval;
       print('活跃轮询间隔: ${activeInterval.inMilliseconds}ms');
 
-      // 在快速复制模式下，间隔应该减少
-      expect(
-        activeInterval.inMilliseconds,
-        lessThanOrEqualTo(initialInterval.inMilliseconds),
-      );
+      expect(activeInterval, equals(Duration.zero));
 
-      // 等待一段时间，检查间隔是否恢复
-      await Future.delayed(Duration(seconds: 10));
-      final relaxedInterval = poller.currentInterval;
-      print('放松轮询间隔: ${relaxedInterval.inMilliseconds}ms');
+      poller.stopPolling();
+
+      shouldFailStream = true;
+      final fallbackPoller = ClipboardPoller();
+      fallbackPoller.startPolling();
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      final fallbackInterval = fallbackPoller.currentInterval;
+      print('回退轮询间隔: ${fallbackInterval.inMilliseconds}ms');
 
       expect(
-        relaxedInterval.inMilliseconds,
-        greaterThan(activeInterval.inMilliseconds),
+        fallbackInterval.inMilliseconds,
+        greaterThan(initialInterval.inMilliseconds),
       );
+      fallbackPoller.stopPolling();
     });
 
     test('内存使用和缓存效率测试', () async {
@@ -174,6 +257,7 @@ void main() {
           id: 'memory_test_$i',
           type: ClipType.text,
           content: '内存测试内容 $i' * (10 + Random().nextInt(50)), // 变长内容
+          metadata: {},
           createdAt: DateTime.now(),
           updatedAt: DateTime.now(),
         );
@@ -189,7 +273,7 @@ void main() {
       print('内存使用指标: $metrics');
 
       // 检查处理效率
-      expect(metrics['detection']['totalProcessed'], greaterThan(80));
+      expect(metrics['processing']['queue']['totalProcessed'], greaterThan(80));
       expect(metrics['storage']['totalSaved'], greaterThan(80));
     });
 
@@ -210,6 +294,7 @@ void main() {
               id: 'concurrent_${batch}_$i',
               type: ClipType.text,
               content: '并发测试内容 ${batch}_$i',
+              metadata: {},
               createdAt: DateTime.now(),
               updatedAt: DateTime.now(),
             );
@@ -260,6 +345,7 @@ void main() {
           id: 'error_test_$i',
           type: ClipType.text,
           content: '错误测试内容 $i',
+          metadata: {},
           createdAt: DateTime.now(),
           updatedAt: DateTime.now(),
         );

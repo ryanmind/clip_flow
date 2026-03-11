@@ -22,13 +22,17 @@ class ClipboardManager {
   /// 私有构造：单例内部初始化
   ClipboardManager._internal({
     Future<void> Function(List<ClipItem> items)? batchInsertOverride,
-  }) : _batchInsertOverride = batchInsertOverride;
+    bool skipStorageInitialization = false,
+  }) : _batchInsertOverride = batchInsertOverride,
+       _skipStorageInitialization = skipStorageInitialization;
 
   /// 测试构造：允许替换批量写入实现，避免真实数据库依赖。
   @visibleForTesting
   ClipboardManager.test({
     Future<void> Function(List<ClipItem> items)? batchInsertOverride,
-  }) : _batchInsertOverride = batchInsertOverride;
+    bool skipStorageInitialization = true,
+  }) : _batchInsertOverride = batchInsertOverride,
+       _skipStorageInitialization = skipStorageInitialization;
 
   /// 单例实例
   static final ClipboardManager _instance = ClipboardManager._internal();
@@ -47,6 +51,7 @@ class ClipboardManager {
 
   final DatabaseService _database = DatabaseService.instance;
   final Future<void> Function(List<ClipItem> items)? _batchInsertOverride;
+  final bool _skipStorageInitialization;
 
   // UI 流控制器
   final StreamController<ClipItem> _uiController =
@@ -73,7 +78,9 @@ class ClipboardManager {
 
   /// 初始化管理器
   Future<void> initialize() async {
-    await _database.initialize();
+    if (!_skipStorageInitialization) {
+      await _database.initialize();
+    }
     _processingQueue.start();
   }
 

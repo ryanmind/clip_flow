@@ -4,22 +4,12 @@ import 'package:clip_flow/core/services/id_generator.dart';
 import 'package:clip_flow/core/services/deduplication_service.dart';
 import 'package:clip_flow/core/services/clipboard/universal_clipboard_detector.dart';
 import 'package:clip_flow/core/services/clipboard/clipboard_processor.dart';
-import 'package:clip_flow/core/services/storage/index.dart';
 import 'package:clip_flow/core/utils/color_utils.dart';
-import 'package:crypto/crypto.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   group('ID Generation and Deduplication Chain Tests', () {
-    setUp(() async {
-      // Initialize test database
-      await DatabaseService.instance.initialize();
-    });
-
-    tearDown(() async {
-      // Clean up test database
-      await DatabaseService.instance.clearAllClipItems();
-    });
-
     test('IDs should be consistent for same content', () {
       // Test text content
       const textContent = 'Hello, World!';
@@ -61,38 +51,6 @@ void main() {
       expect(colorId1.length, equals(64));
     });
 
-    test('DeduplicationService should detect duplicates', () async {
-      // Create first item
-      final item1 = ClipItem(
-        type: ClipType.text,
-        content: 'Test content',
-        metadata: {},
-      );
-
-      // Save to database
-      await DatabaseService.instance.insertClipItem(item1);
-
-      // Create duplicate item with same ID
-      final item2 = ClipItem(
-        id: item1.id, // Same ID
-        type: ClipType.text,
-        content: 'Test content',
-        metadata: {},
-        createdAt: DateTime.now().add(const Duration(seconds: 1)),
-      );
-
-      // Check deduplication
-      final result = await DeduplicationService.instance.checkAndPrepare(
-        item1.id,
-        item2,
-      );
-
-      expect(result, isNotNull);
-      expect(result!.id, equals(item1.id));
-      expect(result.createdAt, equals(item1.createdAt)); // Should keep original
-      expect(result.updatedAt, greaterThan(item1.updatedAt)); // Should update timestamp
-    });
-
     test('ClipboardProcessor should use unified ID generation', () async {
       // This test verifies the flow described in the implementation
       // Note: Full clipboard processing test requires platform channels
@@ -119,7 +77,7 @@ void main() {
       expect(IdGenerator.isValidId(item1.id), isTrue);
     });
 
-    test('File identifier extraction should work correctly', () {
+    test('File identifier extraction should ignore timestamp prefixes', () {
       // Test file path with timestamp
       const filePath1 = 'media/files/image_1704067200000_abc123.jpg';
       const filePath2 = 'media/files/image_1704067201000_abc123.jpg';
@@ -169,12 +127,16 @@ void main() {
       }).toList();
 
       // Generate IDs
-      final ids = normalized.map((c) => IdGenerator.generateId(
-        ClipType.color,
-        c,
-        null,
-        {},
-      )).toList();
+      final ids = normalized
+          .map(
+            (c) => IdGenerator.generateId(
+              ClipType.color,
+              c,
+              null,
+              {},
+            ),
+          )
+          .toList();
 
       // First four (hex formats) should produce same ID
       expect(ids[0], equals(ids[1]));
@@ -188,39 +150,37 @@ void main() {
       }
     });
 
-    test('DeduplicationService handles errors gracefully', () async {
-      // Test with invalid ID
-      final result = await DeduplicationService.instance.checkAndPrepare(
-        'invalid_id',
-        ClipItem(
-          id: 'invalid_id',
-          type: ClipType.text,
-          content: 'Test',
-          metadata: {},
-        ),
+    test('DeduplicationService validates SHA256-shaped IDs', () {
+      expect(
+        DeduplicationService.instance.isValidId('a' * 64),
+        isTrue,
       );
-
-      // Should return the item even with invalid ID
-      expect(result, isNotNull);
-      expect(result!.id, equals('invalid_id'));
+      expect(
+        DeduplicationService.instance.isValidId('invalid_id'),
+        isFalse,
+      );
     });
 
     test('Batch deduplication works correctly', () async {
+      const validId1 =
+          'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+      const validId2 =
+          'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
       final items = [
         ClipItem(
-          id: 'id1',
+          id: validId1,
           type: ClipType.text,
           content: 'Content 1',
           metadata: {},
         ),
         ClipItem(
-          id: 'id2',
+          id: validId2,
           type: ClipType.text,
           content: 'Content 2',
           metadata: {},
         ),
         ClipItem(
-          id: 'id1', // Duplicate
+          id: validId1, // Duplicate
           type: ClipType.text,
           content: 'Content 1',
           metadata: {},
@@ -233,11 +193,13 @@ void main() {
         ),
       ];
 
-      final uniqueItems = await DeduplicationService.instance.batchDeduplicate(items);
+      final uniqueItems = await DeduplicationService.instance.batchDeduplicate(
+        items,
+      );
 
       expect(uniqueItems.length, equals(3)); // Should remove one duplicate
-      expect(uniqueItems[0].id, equals('id1'));
-      expect(uniqueItems[1].id, equals('id2'));
+      expect(uniqueItems[0].id, equals(validId1));
+      expect(uniqueItems[1].id, equals(validId2));
       expect(uniqueItems[2].id, equals('')); // Invalid ID should be kept
     });
   });

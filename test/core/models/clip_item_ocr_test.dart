@@ -3,23 +3,24 @@ import 'package:clip_flow/core/models/clip_item.dart';
 
 void main() {
   group('ClipItem OCR Tests', () {
-    const imageId = 'a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef1234567890';
-    const ocrTextId = 'f6e5d4c3b2a1098765432109876543210fedcba09876543210fedcba0987654321';
+    const imageId =
+        'a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef1234567890';
+    const ocrTextId =
+        'f6e5d4c3b2a1098765432109876543210fedcba09876543210fedcba0987654321';
 
     test('should create ClipItem with OCR fields', () {
       final clipItem = ClipItem(
         type: ClipType.image,
         content: 'image content',
-        metadata: {'fileName': 'test.png'},
+        metadata: {'fileName': 'test.png', 'parentImageId': imageId},
         ocrText: 'Sample OCR text',
         ocrTextId: ocrTextId,
-        parentImageId: imageId,
         isOcrExtracted: true,
       );
 
       expect(clipItem.ocrText, equals('Sample OCR text'));
       expect(clipItem.ocrTextId, equals(ocrTextId));
-      expect(clipItem.parentImageId, equals(imageId));
+      expect(clipItem.metadata['parentImageId'], equals(imageId));
       expect(clipItem.isOcrExtracted, equals(true));
     });
 
@@ -32,7 +33,7 @@ void main() {
 
       expect(clipItem.ocrText, isNull);
       expect(clipItem.ocrTextId, isNull);
-      expect(clipItem.parentImageId, isNull);
+      expect(clipItem.metadata['parentImageId'], isNull);
       expect(clipItem.isOcrExtracted, equals(false));
     });
 
@@ -40,10 +41,9 @@ void main() {
       final clipItem = ClipItem(
         type: ClipType.image,
         content: 'image content',
-        metadata: {'fileName': 'test.png'},
+        metadata: {'fileName': 'test.png', 'parentImageId': imageId},
         ocrText: 'Sample OCR text',
         ocrTextId: ocrTextId,
-        parentImageId: imageId,
         isOcrExtracted: true,
       );
 
@@ -51,7 +51,7 @@ void main() {
 
       expect(json['ocrText'], equals('Sample OCR text'));
       expect(json['ocrTextId'], equals(ocrTextId));
-      expect(json['parentImageId'], equals(imageId));
+      expect(json['metadata']['parentImageId'], equals(imageId));
       expect(json['isOcrExtracted'], equals(true));
     });
 
@@ -60,10 +60,9 @@ void main() {
         'id': imageId,
         'type': 'image',
         'content': 'image content',
-        'metadata': {'fileName': 'test.png'},
+        'metadata': {'fileName': 'test.png', 'parentImageId': imageId},
         'ocrText': 'Sample OCR text',
         'ocrTextId': ocrTextId,
-        'parentImageId': imageId,
         'isOcrExtracted': true,
         'createdAt': DateTime.now().toIso8601String(),
         'updatedAt': DateTime.now().toIso8601String(),
@@ -73,7 +72,7 @@ void main() {
 
       expect(clipItem.ocrText, equals('Sample OCR text'));
       expect(clipItem.ocrTextId, equals(ocrTextId));
-      expect(clipItem.parentImageId, equals(imageId));
+      expect(clipItem.metadata['parentImageId'], equals(imageId));
       expect(clipItem.isOcrExtracted, equals(true));
     });
 
@@ -91,7 +90,7 @@ void main() {
 
       expect(clipItem.ocrText, isNull);
       expect(clipItem.ocrTextId, isNull);
-      expect(clipItem.parentImageId, isNull);
+      expect(clipItem.metadata['parentImageId'], isNull);
       expect(clipItem.isOcrExtracted, equals(false));
     });
 
@@ -99,10 +98,9 @@ void main() {
       final originalItem = ClipItem(
         type: ClipType.image,
         content: 'image content',
-        metadata: {'fileName': 'test.png'},
+        metadata: {'fileName': 'test.png', 'parentImageId': imageId},
         ocrText: 'Original OCR text',
         ocrTextId: ocrTextId,
-        parentImageId: imageId,
         isOcrExtracted: true,
       );
 
@@ -113,7 +111,10 @@ void main() {
 
       expect(updatedItem.ocrText, equals('Updated OCR text'));
       expect(updatedItem.ocrTextId, equals(ocrTextId)); // unchanged
-      expect(updatedItem.parentImageId, equals(imageId)); // unchanged
+      expect(
+        updatedItem.metadata['parentImageId'],
+        equals(imageId),
+      ); // unchanged
       expect(updatedItem.isOcrExtracted, equals(false));
       expect(updatedItem.id, equals(originalItem.id)); // unchanged
     });
@@ -122,10 +123,9 @@ void main() {
       final ocrTextItem = ClipItem(
         type: ClipType.text,
         content: 'Extracted OCR text',
-        metadata: {'source': 'ocr'},
+        metadata: {'source': 'ocr', 'parentImageId': imageId},
         ocrText: 'Extracted OCR text',
         ocrTextId: ocrTextId,
-        parentImageId: imageId,
         isOcrExtracted: true,
       );
 
@@ -133,7 +133,7 @@ void main() {
       expect(ocrTextItem.content, equals('Extracted OCR text'));
       expect(ocrTextItem.ocrText, equals('Extracted OCR text'));
       expect(ocrTextItem.ocrTextId, equals(ocrTextId));
-      expect(ocrTextItem.parentImageId, equals(imageId));
+      expect(ocrTextItem.metadata['parentImageId'], equals(imageId));
       expect(ocrTextItem.isOcrExtracted, equals(true));
     });
 
@@ -144,14 +144,13 @@ void main() {
         metadata: {'fileName': 'test.png'},
         ocrText: null,
         ocrTextId: null,
-        parentImageId: null,
       );
 
       final copiedItem = clipItem.copyWith();
 
       expect(copiedItem.ocrText, isNull);
       expect(copiedItem.ocrTextId, isNull);
-      expect(copiedItem.parentImageId, isNull);
+      expect(copiedItem.metadata['parentImageId'], isNull);
       expect(copiedItem.isOcrExtracted, equals(false));
     });
 

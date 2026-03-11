@@ -107,5 +107,34 @@ void main() {
       expect(processed, ['high-priority', 'low-newer', 'low-oldest-retry']);
       queue.stop();
     });
+
+    test(
+      'continues draining queued tasks after the first batch completes',
+      () async {
+        final queue = AsyncProcessingQueue(maxConcurrentTasks: 2);
+        final processed = <String>[];
+
+        queue.start();
+
+        final futures = List.generate(6, (index) {
+          final item = _item('task-$index');
+          return queue.addClipboardTask(
+            item: item,
+            processor: (queuedItem) async {
+              await Future<void>.delayed(const Duration(milliseconds: 5));
+              processed.add(queuedItem.id);
+              return queuedItem;
+            },
+          );
+        });
+
+        final results = await Future.wait(futures);
+
+        expect(results.whereType<ClipItem>().length, 6);
+        expect(processed, hasLength(6));
+        expect(queue.getStats()['totalProcessed'], 6);
+        queue.stop();
+      },
+    );
   });
 }

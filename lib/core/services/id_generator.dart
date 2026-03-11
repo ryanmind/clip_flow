@@ -51,13 +51,7 @@ class IdGenerator {
         String fileIdentifier;
 
         if (filePath != null && filePath.isNotEmpty) {
-          final fileName = filePath.split('/').last;
-          final fileParts = fileName.split('_');
-          if (fileParts.length >= 2) {
-            fileIdentifier = fileParts.sublist(1).join('_');
-          } else {
-            fileIdentifier = fileName;
-          }
+          fileIdentifier = extractFileIdentifier(filePath);
         } else {
           fileIdentifier =
               metadata['fileName'] as String? ??
@@ -95,6 +89,9 @@ class IdGenerator {
   static String extractFileIdentifier(String filePath) {
     final fileName = filePath.split('/').last;
     final fileParts = fileName.split('_');
+    if (fileParts.length >= 3 && RegExp(r'^\d{10,}$').hasMatch(fileParts[1])) {
+      return fileParts.sublist(2).join('_');
+    }
     if (fileParts.length >= 2) {
       return fileParts.sublist(1).join('_');
     }

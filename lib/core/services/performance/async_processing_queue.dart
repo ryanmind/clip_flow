@@ -180,10 +180,12 @@ class AsyncProcessingQueue {
         _processTask(queueItem)
             .then((_) {
               _processingIds.remove(queueItem.id);
+              unawaited(_processQueue());
             })
             .catchError((Object error) {
               _processingIds.remove(queueItem.id);
               _totalFailed++;
+              unawaited(_processQueue());
               unawaited(
                 Log.e(
                   'Task processing failed',
@@ -214,23 +216,41 @@ class AsyncProcessingQueue {
         },
       );
 
-      // Race the task against a timeout marker to avoid hanging callers.
-      final result = await Future.any<ClipItem?>([
-        queueItem.processor(queueItem.data),
-        Future<ClipItem?>.delayed(_taskTimeout, () {
-          unawaited(
-            Log.w(
-              'Task timeout',
-              tag: 'AsyncProcessingQueue',
-              fields: {
-                'taskId': queueItem.id,
-                'timeout': _taskTimeout.inSeconds,
-              },
-            ),
-          );
-          return null;
-        }),
-      ]);
+      final resultCompleter = Completer<ClipItem?>();
+      final timeoutTimer = Timer(_taskTimeout, () {
+        if (resultCompleter.isCompleted) {
+          return;
+        }
+        unawaited(
+          Log.w(
+            'Task timeout',
+            tag: 'AsyncProcessingQueue',
+            fields: {
+              'taskId': queueItem.id,
+              'timeout': _taskTimeout.inSeconds,
+            },
+          ),
+        );
+        resultCompleter.complete(null);
+      });
+
+      unawaited(
+        queueItem
+            .processor(queueItem.data)
+            .then((result) {
+              if (!resultCompleter.isCompleted) {
+                resultCompleter.complete(result);
+              }
+            })
+            .catchError((Object error, StackTrace stackTrace) {
+              if (!resultCompleter.isCompleted) {
+                resultCompleter.completeError(error, stackTrace);
+              }
+            }),
+      );
+
+      final result = await resultCompleter.future;
+      timeoutTimer.cancel();
 
       stopwatch.stop();
       _processingTimes.add(stopwatch.elapsed);
