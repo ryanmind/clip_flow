@@ -3,6 +3,7 @@
 import 'dart:async';
 
 import 'package:clip_flow/core/models/clip_item.dart';
+import 'package:clip_flow/core/models/user_preferences.dart';
 import 'package:clip_flow/core/services/observability/logger/logger.dart';
 import 'package:clip_flow/core/services/platform/system/window_listener.dart';
 import 'package:clip_flow/core/utils/clip_item_card_util.dart';
@@ -406,51 +407,51 @@ class _ClassicModePageState extends ConsumerState<ClassicModePage>
     final l10n = S.of(context)!;
     unawaited(
       showDialog<void>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(l10n.userGuideTitle),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _buildGuideSection(
-                l10n.userGuideBasicUsageTitle,
-                [
-                  l10n.userGuideBasicUsage1,
-                  l10n.userGuideBasicUsage2,
-                  l10n.userGuideBasicUsage3,
-                ],
-              ),
-              const SizedBox(height: 16),
-              _buildGuideSection(
-                l10n.userGuideSearchFilterTitle,
-                [
-                  l10n.userGuideSearchFilter1,
-                  l10n.userGuideSearchFilter2,
-                  l10n.userGuideSearchFilter3,
-                ],
-              ),
-              const SizedBox(height: 16),
-              _buildGuideSection(
-                l10n.userGuideAdvancedTitle,
-                [
-                  l10n.userGuideAdvanced1,
-                  l10n.userGuideAdvanced2,
-                  l10n.userGuideAdvanced3,
-                  l10n.userGuideAdvanced4,
-                ],
-              ),
-            ],
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(l10n.userGuideTitle),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildGuideSection(
+                  l10n.userGuideBasicUsageTitle,
+                  [
+                    l10n.userGuideBasicUsage1,
+                    l10n.userGuideBasicUsage2,
+                    l10n.userGuideBasicUsage3,
+                  ],
+                ),
+                const SizedBox(height: 16),
+                _buildGuideSection(
+                  l10n.userGuideSearchFilterTitle,
+                  [
+                    l10n.userGuideSearchFilter1,
+                    l10n.userGuideSearchFilter2,
+                    l10n.userGuideSearchFilter3,
+                  ],
+                ),
+                const SizedBox(height: 16),
+                _buildGuideSection(
+                  l10n.userGuideAdvancedTitle,
+                  [
+                    l10n.userGuideAdvanced1,
+                    l10n.userGuideAdvanced2,
+                    l10n.userGuideAdvanced3,
+                    l10n.userGuideAdvanced4,
+                  ],
+                ),
+              ],
+            ),
           ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text(l10n.actionClose),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: Text(l10n.actionClose),
-          ),
-        ],
-      ),
       ), // 关闭 showDialog
     ); // 关闭 unawaited
   }

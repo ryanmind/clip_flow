@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:clip_flow/core/models/user_preferences.dart';
 import 'package:clip_flow/core/services/observability/index.dart';
-import 'package:clip_flow/shared/providers/app_providers.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// 用户偏好设置持久化服务（单例）

@@ -1,9 +1,9 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:clip_flow/core/models/user_preferences.dart';
 import 'package:clip_flow/core/services/observability/index.dart';
 import 'package:clip_flow/core/services/platform/system/window_listener.dart';
-import 'package:clip_flow/shared/providers/app_providers.dart';
 import 'package:flutter/services.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';

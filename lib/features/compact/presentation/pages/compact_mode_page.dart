@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:ui' as ui;
 
 import 'package:clip_flow/core/models/clip_item.dart';
+import 'package:clip_flow/core/models/user_preferences.dart';
 import 'package:clip_flow/core/services/observability/logger/logger.dart';
 import 'package:clip_flow/core/services/platform/index.dart';
 import 'package:clip_flow/core/utils/clip_item_card_util.dart';
@@ -225,7 +226,11 @@ class _CompactModePageState extends ConsumerState<CompactModePage> {
                   },
                   onDelete: () {
                     unawaited(
-                      ClipItemUtil.handleItemDelete(item, ref, context: context),
+                      ClipItemUtil.handleItemDelete(
+                        item,
+                        ref,
+                        context: context,
+                      ),
                     );
                   },
                   onFavoriteToggle: () {
@@ -242,7 +247,11 @@ class _CompactModePageState extends ConsumerState<CompactModePage> {
                   onOcrTextTap: () {
                     // 点击OCR文字时只复制文字
                     unawaited(
-                      ClipItemUtil.handleOcrTextTap(item, ref, context: context),
+                      ClipItemUtil.handleOcrTextTap(
+                        item,
+                        ref,
+                        context: context,
+                      ),
                     );
                   },
                 ),
@@ -410,7 +419,9 @@ class _CompactModePageState extends ConsumerState<CompactModePage> {
                                     Icon(
                                       Icons.content_paste_search,
                                       size: 64,
-                                      color: Theme.of(context).brightness == Brightness.dark
+                                      color:
+                                          Theme.of(context).brightness ==
+                                              Brightness.dark
                                           ? Colors.white.withValues(alpha: 0.6)
                                           : Colors.black.withValues(alpha: 0.6),
                                     ),
@@ -418,7 +429,9 @@ class _CompactModePageState extends ConsumerState<CompactModePage> {
                                     Text(
                                       S.of(context)!.searchEmptyTitle,
                                       style: TextStyle(
-                                        color: Theme.of(context).brightness == Brightness.dark
+                                        color:
+                                            Theme.of(context).brightness ==
+                                                Brightness.dark
                                             ? Colors.white
                                             : Colors.black,
                                         fontSize: 18,

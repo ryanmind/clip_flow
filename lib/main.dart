@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:clip_flow/app.dart';
 import 'package:clip_flow/core/constants/colors.dart';
+import 'package:clip_flow/core/models/user_preferences.dart';
 import 'package:clip_flow/core/services/clipboard/index.dart';
 import 'package:clip_flow/core/services/observability/index.dart';
 import 'package:clip_flow/core/services/operations/index.dart';

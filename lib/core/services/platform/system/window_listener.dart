@@ -5,9 +5,9 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:clip_flow/core/constants/clip_constants.dart';
+import 'package:clip_flow/core/models/user_preferences.dart';
 import 'package:clip_flow/core/services/observability/index.dart';
 import 'package:clip_flow/core/services/platform/index.dart';
-import 'package:clip_flow/shared/providers/app_providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
@@ -811,8 +811,18 @@ class ScreenInfo {
         isMain: map['isMain'] as bool? ?? false,
       );
     } catch (e) {
-      unawaited(Log.e('📏 [ScreenInfo.fromMap] 解析失败: $e', tag: 'WindowManagementService'));
-      unawaited(Log.e('📏 [ScreenInfo.fromMap] 数据: $map', tag: 'WindowManagementService'));
+      unawaited(
+        Log.e(
+          '📏 [ScreenInfo.fromMap] 解析失败: $e',
+          tag: 'WindowManagementService',
+        ),
+      );
+      unawaited(
+        Log.e(
+          '📏 [ScreenInfo.fromMap] 数据: $map',
+          tag: 'WindowManagementService',
+        ),
+      );
       rethrow;
     }
   }
@@ -877,14 +887,18 @@ class ScreenInfoResponse {
 
   factory ScreenInfoResponse.fromMap(Map<String, dynamic> map) {
     try {
-      unawaited(Log.d(
-        '📏 [ScreenInfoResponse.fromMap] 开始解析数据',
-        tag: 'WindowManagementService',
-      ));
-      unawaited(Log.d(
-        '📏 [ScreenInfoResponse.fromMap] mainDisplay 类型: ${map['mainDisplay']?.runtimeType}',
-        tag: 'WindowManagementService',
-      ));
+      unawaited(
+        Log.d(
+          '📏 [ScreenInfoResponse.fromMap] 开始解析数据',
+          tag: 'WindowManagementService',
+        ),
+      );
+      unawaited(
+        Log.d(
+          '📏 [ScreenInfoResponse.fromMap] mainDisplay 类型: ${map['mainDisplay']?.runtimeType}',
+          tag: 'WindowManagementService',
+        ),
+      );
 
       final mainDisplayData = map['mainDisplay'];
       if (mainDisplayData == null) {
@@ -894,10 +908,12 @@ class ScreenInfoResponse {
       final mainDisplay = ScreenInfo.fromMap(
         Map<String, dynamic>.from(mainDisplayData as Map),
       );
-      unawaited(Log.d(
-        '📏 [ScreenInfoResponse.fromMap] 主屏幕解析成功: ${mainDisplay.physicalWidth}x${mainDisplay.physicalHeight}',
-        tag: 'WindowManagementService',
-      ));
+      unawaited(
+        Log.d(
+          '📏 [ScreenInfoResponse.fromMap] 主屏幕解析成功: ${mainDisplay.physicalWidth}x${mainDisplay.physicalHeight}',
+          tag: 'WindowManagementService',
+        ),
+      );
 
       final allDisplaysData = map['allDisplays'] as List? ?? [];
       final allDisplays = allDisplaysData
@@ -909,10 +925,12 @@ class ScreenInfoResponse {
 
       final displayCount = map['displayCount'] as int? ?? allDisplays.length;
 
-      unawaited(Log.d(
-        '📏 [ScreenInfoResponse.fromMap] 解析完成，显示器数量: $displayCount',
-        tag: 'WindowManagementService',
-      ));
+      unawaited(
+        Log.d(
+          '📏 [ScreenInfoResponse.fromMap] 解析完成，显示器数量: $displayCount',
+          tag: 'WindowManagementService',
+        ),
+      );
 
       return ScreenInfoResponse(
         mainDisplay: mainDisplay,
@@ -920,10 +938,12 @@ class ScreenInfoResponse {
         displayCount: displayCount,
       );
     } catch (e) {
-      unawaited(Log.e(
-        '📏 [ScreenInfoResponse.fromMap] 解析失败: $e',
-        tag: 'WindowManagementService',
-      ));
+      unawaited(
+        Log.e(
+          '📏 [ScreenInfoResponse.fromMap] 解析失败: $e',
+          tag: 'WindowManagementService',
+        ),
+      );
       rethrow;
     }
   }
