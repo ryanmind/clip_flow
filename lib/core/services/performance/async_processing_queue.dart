@@ -50,7 +50,15 @@ class AsyncProcessingQueue {
 
   final PriorityQueue<_QueueItem<ClipItem>> _queue =
       PriorityQueue<_QueueItem<ClipItem>>(
-        (a, b) => b.priority.value.compareTo(a.priority.value),
+        (a, b) {
+          final priorityComparison = a.priority.value.compareTo(
+            b.priority.value,
+          );
+          if (priorityComparison != 0) {
+            return priorityComparison;
+          }
+          return a.timestamp.compareTo(b.timestamp);
+        },
       );
 
   final Set<String> _processingIds = {};
@@ -105,12 +113,21 @@ class AsyncProcessingQueue {
     }
 
     if (_queue.length >= _maxQueueSize) {
+      final droppedItem = _queue.removeLowestPriority();
+      _pendingItems.remove(droppedItem.id);
+      if (!(droppedItem.completer?.isCompleted ?? true)) {
+        droppedItem.completer!.complete(null);
+      }
       await Log.w(
-        'Queue full, dropping oldest task',
+        'Queue full, dropping lowest-priority task',
         tag: 'AsyncProcessingQueue',
-        fields: {'queueSize': _queue.length, 'maxSize': _maxQueueSize},
+        fields: {
+          'queueSize': _queue.length,
+          'maxSize': _maxQueueSize,
+          'droppedTaskId': droppedItem.id,
+          'droppedPriority': droppedItem.priority.name,
+        },
       );
-      _queue.remove();
     }
 
     final queueItem = _QueueItem<ClipItem>(
@@ -197,25 +214,23 @@ class AsyncProcessingQueue {
         },
       );
 
-      // 设置任务超时
-      final result = await queueItem
-          .processor(queueItem.data)
-          .timeout(
-            _taskTimeout,
-            onTimeout: () {
-              unawaited(
-                Log.w(
-                  'Task timeout',
-                  tag: 'AsyncProcessingQueue',
-                  fields: {
-                    'taskId': queueItem.id,
-                    'timeout': _taskTimeout.inSeconds,
-                  },
-                ),
-              );
-              return null;
-            },
+      // Race the task against a timeout marker to avoid hanging callers.
+      final result = await Future.any<ClipItem?>([
+        queueItem.processor(queueItem.data),
+        Future<ClipItem?>.delayed(_taskTimeout, () {
+          unawaited(
+            Log.w(
+              'Task timeout',
+              tag: 'AsyncProcessingQueue',
+              fields: {
+                'taskId': queueItem.id,
+                'timeout': _taskTimeout.inSeconds,
+              },
+            ),
           );
+          return null;
+        }),
+      ]);
 
       stopwatch.stop();
       _processingTimes.add(stopwatch.elapsed);
@@ -369,6 +384,31 @@ class PriorityQueue<T> {
     if (_data.isNotEmpty) {
       _data[0] = last;
       _bubbleDown(0);
+    }
+
+    return result;
+  }
+
+  /// 从队列中移除并返回最低优先级元素。
+  T removeLowestPriority() {
+    if (_data.isEmpty) {
+      throw StateError('Cannot remove from empty queue');
+    }
+
+    var lowestIndex = 0;
+    for (var i = 1; i < _data.length; i++) {
+      if (_comparator(_data[i], _data[lowestIndex]) < 0) {
+        lowestIndex = i;
+      }
+    }
+
+    final result = _data[lowestIndex];
+    final last = _data.removeLast();
+
+    if (lowestIndex < _data.length) {
+      _data[lowestIndex] = last;
+      _bubbleDown(lowestIndex);
+      _bubbleUp(lowestIndex);
     }
 
     return result;

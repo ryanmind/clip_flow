@@ -5,6 +5,7 @@ import 'package:clip_flow/core/services/clipboard/index.dart';
 import 'package:clip_flow/core/services/observability/index.dart';
 import 'package:clip_flow/core/services/performance/index.dart';
 import 'package:clip_flow/core/services/storage/index.dart';
+import 'package:meta/meta.dart';
 
 /// 剪贴板管理器
 ///
@@ -19,7 +20,15 @@ class ClipboardManager {
   factory ClipboardManager() => _instance;
 
   /// 私有构造：单例内部初始化
-  ClipboardManager._internal();
+  ClipboardManager._internal({
+    Future<void> Function(List<ClipItem> items)? batchInsertOverride,
+  }) : _batchInsertOverride = batchInsertOverride;
+
+  /// 测试构造：允许替换批量写入实现，避免真实数据库依赖。
+  @visibleForTesting
+  ClipboardManager.test({
+    Future<void> Function(List<ClipItem> items)? batchInsertOverride,
+  }) : _batchInsertOverride = batchInsertOverride;
 
   /// 单例实例
   static final ClipboardManager _instance = ClipboardManager._internal();
@@ -37,6 +46,7 @@ class ClipboardManager {
   );
 
   final DatabaseService _database = DatabaseService.instance;
+  final Future<void> Function(List<ClipItem> items)? _batchInsertOverride;
 
   // UI 流控制器
   final StreamController<ClipItem> _uiController =
@@ -44,6 +54,9 @@ class ClipboardManager {
 
   // 管理器是否已销毁
   bool _isDisposed = false;
+  bool _isDisposing = false;
+  int _activeChangeHandlers = 0;
+  Completer<void>? _drainCompleter;
 
   // 批量写入缓存
   final List<ClipItem> _writeBuffer = [];
@@ -66,6 +79,9 @@ class ClipboardManager {
 
   /// 启动剪贴板监控
   void startMonitoring() {
+    if (_isDisposed || _isDisposing) {
+      return;
+    }
     _poller.startPolling(
       onClipboardChanged: _handleClipboardChange,
       onError: _handleError,
@@ -74,13 +90,17 @@ class ClipboardManager {
 
   /// 停止剪贴板监控
   void stopMonitoring() {
+    _stopMonitoring(flushPending: true);
+  }
+
+  void _stopMonitoring({required bool flushPending}) {
     _poller.stopPolling();
     _processingQueue.stop();
     _batchWriteTimer?.cancel();
     _batchWriteTimer = null;
 
     // 保存剩余的批量数据
-    if (_writeBuffer.isNotEmpty) {
+    if (flushPending && _writeBuffer.isNotEmpty) {
       unawaited(_flushWriteBuffer());
     }
   }
@@ -108,7 +128,9 @@ class ClipboardManager {
 
   /// 处理剪贴板变化
   Future<void> _handleClipboardChange() async {
-    if (_isDisposed) return;
+    if (_isDisposed || _isDisposing) return;
+
+    _activeChangeHandlers++;
 
     try {
       _totalClipsDetected++;
@@ -164,6 +186,12 @@ class ClipboardManager {
         tag: 'OptimizedClipboardManager',
         error: e,
       );
+    } finally {
+      _activeChangeHandlers--;
+      if (_isDisposing && _activeChangeHandlers == 0) {
+        _drainCompleter?.complete();
+        _drainCompleter = null;
+      }
     }
   }
 
@@ -238,7 +266,8 @@ class ClipboardManager {
     final bufferAge = _lastClipTime == null
         ? Duration.zero
         : DateTime.now().difference(_lastClipTime!);
-    final shouldFlush = _writeBuffer.length >= _maxBufferSize ||
+    final shouldFlush =
+        _writeBuffer.length >= _maxBufferSize ||
         item.type == ClipType.text ||
         bufferAge > _maxBufferAge;
 
@@ -317,10 +346,15 @@ class ClipboardManager {
 
     // 使用数据库的批量插入功能
     final stopwatch = Stopwatch()..start();
+    final batchInsertOverride = _batchInsertOverride;
 
     try {
-      // 显式启用事务以确保原子性 (漏洞#9)
-      await _database.batchInsertClipItems(items);
+      if (batchInsertOverride != null) {
+        await batchInsertOverride(items);
+      } else {
+        // 显式启用事务以确保原子性 (漏洞#9)
+        await _database.batchInsertClipItems(items);
+      }
 
       stopwatch.stop();
 
@@ -435,17 +469,37 @@ class ClipboardManager {
     await _addToProcessingQueue(item);
   }
 
+  /// 测试辅助：直接向写入缓冲区注入项目，跳过数据库和剪贴板依赖。
+  @visibleForTesting
+  void debugBufferItem(ClipItem item) {
+    _writeBuffer.add(item);
+  }
+
+  /// 测试辅助：查看当前缓冲区大小。
+  @visibleForTesting
+  int get debugBufferedItemCount => _writeBuffer.length;
+
   /// 销毁管理器
   Future<void> dispose() async {
-    if (_isDisposed) return;
+    if (_isDisposed || _isDisposing) return;
 
-    _isDisposed = true;
-    stopMonitoring();
+    _isDisposing = true;
+    _stopMonitoring(flushPending: false);
+    await _waitForActiveHandlers();
     await flushAllBuffers();
+    _isDisposed = true;
 
     // 安全关闭流控制器
     if (!_uiController.isClosed) {
       await _uiController.close();
     }
+  }
+
+  Future<void> _waitForActiveHandlers() async {
+    if (_activeChangeHandlers == 0) {
+      return;
+    }
+    _drainCompleter ??= Completer<void>();
+    await _drainCompleter!.future;
   }
 }

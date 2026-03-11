@@ -24,8 +24,9 @@ bool _isHiddenLaunch() {
 /// 通过系统运行时间判断：如果系统启动时间小于120秒，认为是登录启动
 Future<bool> _isLoginLaunch() async {
   try {
-    final result = await const MethodChannel('clipboard_service')
-        .invokeMethod<Map<Object?, Object?>>('isLoginLaunch');
+    final result = await const MethodChannel(
+      'clipboard_service',
+    ).invokeMethod<Map<Object?, Object?>>('isLoginLaunch');
     if (result != null) {
       return result['isLoginLaunch'] as bool? ?? false;
     }
@@ -123,7 +124,7 @@ Future<void> _runApp() async {
 
   // 初始化服务
   await DatabaseService.instance.initialize();
-  
+
   // 执行数据库文件路径修复（方案3：混合修复）
   // 在应用启动时执行一次，修复无效的file_path并清理无效记录
   try {
@@ -141,16 +142,13 @@ Future<void> _runApp() async {
       error: e,
     );
   }
-  
+
   await EncryptionService.instance.initialize();
 
-  // 使用剪贴板管理器替代基础剪贴板服务
+  // ClipboardManager is the single owner of clipboard monitoring.
   final clipboardManager = ClipboardManager();
   await clipboardManager.initialize();
   clipboardManager.startMonitoring();
-
-  // 为了兼容性，仍然初始化基础服务（但不再启动监控）
-  await ClipboardService.instance.initialize();
 
   // 初始化自动更新服务
   try {

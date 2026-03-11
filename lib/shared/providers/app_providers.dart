@@ -55,13 +55,16 @@ class DynamicHomePage extends ConsumerWidget {
         return FadeTransition(
           opacity: animation,
           child: SlideTransition(
-            position: Tween<Offset>(
-              begin: const Offset(0.05, 0), // 轻微的滑动效果
-              end: Offset.zero,
-            ).animate(CurvedAnimation(
-              parent: animation,
-              curve: Curves.easeOutCubic,
-            )),
+            position:
+                Tween<Offset>(
+                  begin: const Offset(0.05, 0), // 轻微的滑动效果
+                  end: Offset.zero,
+                ).animate(
+                  CurvedAnimation(
+                    parent: animation,
+                    curve: Curves.easeOutCubic,
+                  ),
+                ),
             child: child,
           ),
         );
@@ -190,7 +193,7 @@ class ClipboardHistoryNotifier extends StateNotifier<List<ClipItem>> {
             .map((e) => e.value),
       ];
 
-    unawaited(
+      unawaited(
         Log.d(
           'Moved existing item to top: ${item.id} (${item.type})',
           tag: 'ClipboardHistoryNotifier',
@@ -838,12 +841,9 @@ class UserPreferencesNotifier extends StateNotifier<UserPreferences> {
 }
 
 //// 剪贴板服务提供者
-/// 提供全局单例的 ClipboardService，并在首次读取时初始化轮询监听。
+/// 提供全局单例的 ClipboardService，用于剪贴板写入和查询能力。
 final clipboardServiceProvider = Provider<ClipboardService>((ref) {
-  final service = ClipboardService.instance;
-  // 初始化剪贴板监听（幂等）
-  unawaited(service.initialize());
-  return service;
+  return ClipboardService.instance;
 });
 
 //// 剪贴板流提供者
