@@ -26,12 +26,6 @@ class AppDelegate: FlutterAppDelegate {
   
   override func applicationDidFinishLaunching(_ notification: Notification) {
     super.applicationDidFinishLaunching(notification)
-    
-    // 手动注册 ClipboardPlugin
-    if let controller = mainFlutterWindow?.contentViewController as? FlutterViewController {
-      let registrar = controller.registrar(forPlugin: "ClipboardPlugin")
-      ClipboardPlugin.register(with: registrar)
-    }
   }
   
   private func getClipboardImage(result: @escaping FlutterResult) {
