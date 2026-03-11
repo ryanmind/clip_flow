@@ -3,287 +3,294 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 
-/// 剪贴板轮询管理器
+/// 剪贴板监听管理器
 ///
-/// 负责管理剪贴板的轮询检测，包括：
-/// - 自适应轮询间隔调整
-/// - 平台特定的剪贴板序列检查
-/// - 轮询状态管理
-/// - 性能优化的轮询策略
-/// - 智能调度和资源管理
+/// 优先订阅原生事件流，只有在事件流不可用时才回退到 Dart 侧轮询。
 class ClipboardPoller {
   static const MethodChannel _platformChannel = MethodChannel(
     'clipboard_service',
   );
+  static const EventChannel _eventsChannel = EventChannel('clipboard_events');
 
-  // 轮询间隔配置 - 优化快速复制检测
-  static const Duration _minInterval = Duration(
-    milliseconds: 100,
-  ); // 快速模式下的最小间隔
-  static const Duration _maxInterval = Duration(milliseconds: 3000); // 减少最大间隔
-  static const Duration _defaultInterval = Duration(
-    milliseconds: 300,
-  ); // 提高默认频率
-  static const Duration _idleInterval = Duration(
-    milliseconds: 8000,
-  ); // 空闲时的间隔
+  static const Duration _fallbackInterval = Duration(milliseconds: 500);
+  static const Duration _rapidCopyWindow = Duration(seconds: 1);
+  static const Duration _rapidCopyTimeout = Duration(seconds: 5);
+  static const int _rapidCopyThreshold = 3;
+  static const int _idleThreshold = 20;
 
-  // 自适应调整参数 - 优化快速复制场景
-  static const double _speedUpFactor = 0.7; // 更快的加速
-  static const double _slowDownFactor = 1.3; // 较缓的减速
-  static const int _consecutiveNoChangeThreshold = 5; // 延迟进入慢速模式
-  static const int _recentChangeWindow = 8; // 扩大监控窗口
-  static const int _idleThreshold = 30; // 延迟进入空闲模式
-  static const int _rapidCopyThreshold = 3; // 快速复制检测阈值
+  // ignore: cancel_subscriptions, reason: cancelled via _cancelActiveMonitoring
+  StreamSubscription<dynamic>? _eventsSubscription;
+  Timer? _fallbackTimer;
+  Timer? _debounceTimer;
 
-  Timer? _pollingTimer;
-  Duration _currentInterval = _defaultInterval;
+  Duration _currentInterval = Duration.zero;
   bool _isPolling = false;
   bool _isPaused = false;
   bool _isIdleMode = false;
-
-  // 防止 Timer 回调重复执行的标志
   bool _isProcessingCallback = false;
+  bool _isRapidCopyMode = false;
+  bool _isUsingFallbackPolling = false;
 
-  // 变化检测状态
   int _lastClipboardSequence = -1;
   int _consecutiveNoChangeCount = 0;
-  final List<DateTime> _recentChanges = [];
-
-  // 快速复制检测和防抖
-  bool _isRapidCopyMode = false;
-  DateTime? _lastRapidCopyTime;
   int _rapidCopyCount = 0;
-  Timer? _debounceTimer;
-
-  // 性能监控
   int _totalChecks = 0;
   int _successfulChecks = 0;
   int _failedChecks = 0;
-  DateTime? _lastChangeTime;
-  Duration _totalPollingTime = Duration.zero;
-  DateTime? _pollingStartTime;
+  int _totalNativeEvents = 0;
 
-  // 回调函数
+  DateTime? _lastRapidCopyTime;
+  DateTime? _lastChangeTime;
+  DateTime? _monitoringStartTime;
+  Duration _totalMonitoringTime = Duration.zero;
+  final List<DateTime> _recentChanges = [];
+
   VoidCallback? _onClipboardChanged;
   void Function(String error)? _onError;
 
-  /// 开始轮询
+  /// 开始监听
   void startPolling({
     VoidCallback? onClipboardChanged,
     void Function(String error)? onError,
   }) {
-    if (_isPolling && !_isPaused) return;
+    if (_isPolling && !_isPaused) {
+      return;
+    }
 
     _onClipboardChanged = onClipboardChanged;
     _onError = onError;
     _isPolling = true;
     _isPaused = false;
-    _pollingStartTime = DateTime.now();
+    _monitoringStartTime = DateTime.now();
 
-    _scheduleNextPoll();
+    _startMonitoring();
   }
 
-  /// 停止轮询
+  /// 停止监听
   void stopPolling() {
-    _pollingTimer?.cancel();
-    _pollingTimer = null;
+    _cancelActiveMonitoring();
     _isPolling = false;
     _isPaused = false;
 
-    // 清理回调，避免在关闭后误触发
     _onClipboardChanged = null;
     _onError = null;
 
-    // 更新总轮询时间
-    if (_pollingStartTime != null) {
-      _totalPollingTime += DateTime.now().difference(_pollingStartTime!);
-      _pollingStartTime = null;
+    if (_monitoringStartTime != null) {
+      _totalMonitoringTime += DateTime.now().difference(_monitoringStartTime!);
+      _monitoringStartTime = null;
     }
 
-    _resetState();
+    _resetRuntimeState();
   }
 
-  /// 暂停轮询
+  /// 暂停监听
   void pausePolling() {
-    if (!_isPolling) return;
+    if (!_isPolling) {
+      return;
+    }
 
-    _pollingTimer?.cancel();
-    _pollingTimer = null;
+    _cancelActiveMonitoring();
     _isPaused = true;
 
-    // 更新总轮询时间
-    if (_pollingStartTime != null) {
-      _totalPollingTime += DateTime.now().difference(_pollingStartTime!);
-      _pollingStartTime = null;
+    if (_monitoringStartTime != null) {
+      _totalMonitoringTime += DateTime.now().difference(_monitoringStartTime!);
+      _monitoringStartTime = null;
     }
   }
 
-  /// 恢复轮询
+  /// 恢复监听
   void resumePolling() {
-    if (!_isPolling || !_isPaused) return;
+    if (!_isPolling || !_isPaused) {
+      return;
+    }
 
     _isPaused = false;
-    _pollingStartTime = DateTime.now();
-    _scheduleNextPoll();
+    _monitoringStartTime = DateTime.now();
+    _startMonitoring();
   }
 
   /// 手动触发一次检查
   Future<bool> checkOnce() async {
-    return _checkClipboardChange();
+    _totalChecks++;
+
+    try {
+      final hasChanged = await _checkClipboardChange();
+      if (hasChanged) {
+        _successfulChecks++;
+      } else {
+        _recordNoChange();
+      }
+      return hasChanged;
+    } on Exception catch (e) {
+      _failedChecks++;
+      _onError?.call('手动检查失败: $e');
+      rethrow;
+    }
   }
 
-  /// 获取当前轮询间隔
+  /// 当前监控节奏；事件模式下为 0，轮询回退时为当前轮询间隔。
   Duration get currentInterval => _currentInterval;
 
-  /// 获取轮询状态（是否正在进行轮询活动）
+  /// 当前是否处于活动监听状态。
   bool get isPolling => _isPolling && !_isPaused;
 
-  /// 是否处于空闲模式
+  /// 是否处于空闲模式。
   bool get isIdleMode => _isIdleMode;
 
-  /// 重置轮询状态
-  void _resetState() {
-    _currentInterval = _defaultInterval;
-    _lastClipboardSequence = -1;
-    _consecutiveNoChangeCount = 0;
-    _recentChanges.clear();
-    _isIdleMode = false;
-    _isRapidCopyMode = false;
-    _lastRapidCopyTime = null;
-    _rapidCopyCount = 0;
-    _debounceTimer?.cancel();
-    _debounceTimer = null;
+  void _startMonitoring() {
+    _cancelActiveMonitoring();
+    _startNativeEventMonitoring();
   }
 
-  /// 调度下一次轮询（优化版本）
-  void _scheduleNextPoll() {
-    if (!_isPolling || _isPaused) return;
+  void _startNativeEventMonitoring() {
+    _isUsingFallbackPolling = false;
+    _currentInterval = Duration.zero;
 
-    // 先取消现有的 Timer，防止竞态条件
-    _pollingTimer?.cancel();
+    _eventsSubscription = _eventsChannel.receiveBroadcastStream().listen(
+      _handleNativeEvent,
+      onError: _handleNativeEventError,
+      onDone: _handleNativeEventDone,
+      cancelOnError: false,
+    );
+  }
 
-    // 智能调度：根据系统负载和历史模式调整
-    final adjustedInterval = _getSmartInterval();
+  void _handleNativeEvent(dynamic event) {
+    if (!_isPolling || _isPaused) {
+      return;
+    }
 
-    _pollingTimer = Timer(adjustedInterval, () async {
-      // 如果在等待期间已停止或暂停，直接退出当前回合
-      if (!_isPolling || _isPaused) return;
+    if (event is! Map) {
+      _onError?.call('收到未知格式的剪贴板事件');
+      return;
+    }
 
-      // 防止回调重复执行
-      if (_isProcessingCallback) return;
+    final data = Map<Object?, Object?>.from(event);
+    final sequence = (data['sequence'] as num?)?.toInt();
+    final timestampMs = (data['timestamp'] as num?)?.toInt();
+    final intervalMs = (data['monitoringIntervalMs'] as num?)?.toInt();
+
+    if (sequence != null && sequence == _lastClipboardSequence) {
+      return;
+    }
+
+    if (sequence != null) {
+      _lastClipboardSequence = sequence;
+    }
+
+    _totalChecks++;
+    _successfulChecks++;
+    _totalNativeEvents++;
+    _currentInterval = intervalMs != null && intervalMs > 0
+        ? Duration(milliseconds: intervalMs)
+        : Duration.zero;
+
+    final eventTime = timestampMs == null
+        ? DateTime.now()
+        : DateTime.fromMillisecondsSinceEpoch(timestampMs);
+    _recordChange(eventTime);
+    _onClipboardChanged?.call();
+  }
+
+  void _handleNativeEventError(Object error, StackTrace _) {
+    if (!_isPolling || _isPaused) {
+      return;
+    }
+
+    _failedChecks++;
+    _switchToFallbackPolling('剪贴板事件流失败: $error');
+  }
+
+  void _handleNativeEventDone() {
+    if (!_isPolling || _isPaused || _isUsingFallbackPolling) {
+      return;
+    }
+
+    _switchToFallbackPolling('剪贴板事件流已结束');
+  }
+
+  void _switchToFallbackPolling(String reason) {
+    _cancelActiveMonitoring();
+    _isUsingFallbackPolling = true;
+    _currentInterval = _fallbackInterval;
+    _onError?.call('$reason，已回退到轮询监听');
+    _scheduleNextFallbackPoll();
+  }
+
+  void _scheduleNextFallbackPoll() {
+    if (!_isPolling || _isPaused || !_isUsingFallbackPolling) {
+      return;
+    }
+
+    _fallbackTimer?.cancel();
+    _fallbackTimer = Timer(_currentInterval, () async {
+      if (!_isPolling || _isPaused || !_isUsingFallbackPolling) {
+        return;
+      }
+
+      if (_isProcessingCallback) {
+        return;
+      }
+
       _isProcessingCallback = true;
-
       try {
         _totalChecks++;
         final hasChanged = await _checkClipboardChange();
-
         if (hasChanged) {
           _successfulChecks++;
-        }
-
-        _adjustPollingInterval(hasChanged);
-
-        if (hasChanged) {
           _onClipboardChanged?.call();
+        } else {
+          _recordNoChange();
         }
-
-        _scheduleNextPoll();
       } on Exception catch (e) {
         _failedChecks++;
         _onError?.call('轮询检查失败: $e');
-        _scheduleNextPoll();
       } finally {
         _isProcessingCallback = false;
+        _scheduleNextFallbackPoll();
       }
     });
   }
 
-  /// 获取智能调整后的间隔
-  Duration _getSmartInterval() {
-    final now = DateTime.now();
+  void _cancelActiveMonitoring() {
+    _fallbackTimer?.cancel();
+    _fallbackTimer = null;
 
-    // 快速复制模式：使用最小间隔
-    if (_isRapidCopyMode) {
-      return _minInterval;
+    final subscription = _eventsSubscription;
+    _eventsSubscription = null;
+    if (subscription != null) {
+      unawaited(subscription.cancel());
     }
-
-    // 检查是否应该进入空闲模式
-    if (_consecutiveNoChangeCount > _idleThreshold) {
-      _isIdleMode = true;
-      return _idleInterval;
-    }
-
-    // 检查是否应该退出空闲模式
-    if (_isIdleMode && _consecutiveNoChangeCount < _idleThreshold ~/ 2) {
-      _isIdleMode = false;
-    }
-
-    // 根据时间模式调整（例如，工作时间 vs 非工作时间）
-    final hour = now.hour;
-    if (hour < 8 || hour > 22) {
-      // 非工作时间，使用较长间隔
-      return Duration(
-        milliseconds: (_currentInterval.inMilliseconds * 1.5).round(),
-      );
-    }
-
-    return _currentInterval;
   }
 
-  /// 检查剪贴板是否发生变化
   Future<bool> _checkClipboardChange() async {
     try {
       final currentSequence = await _getClipboardSequence();
-
       if (currentSequence != _lastClipboardSequence) {
         _lastClipboardSequence = currentSequence;
         _recordChange();
         return true;
       }
-
       return false;
     } on Exception catch (_) {
-      // 如果无法获取序列号，回退到内容比较
       return _fallbackContentCheck();
     }
   }
 
-  /// 获取平台特定的剪贴板序列号
   Future<int> _getClipboardSequence() async {
-    if (Platform.isMacOS) {
+    if (Platform.isMacOS || Platform.isWindows || Platform.isLinux) {
       try {
         final result = await _platformChannel.invokeMethod<int>(
           'getClipboardSequence',
         );
         return result ?? -1;
       } on Exception catch (e) {
-        throw Exception('无法获取 macOS 剪贴板序列号: $e');
+        throw Exception('无法获取剪贴板序列号: $e');
       }
-    } else if (Platform.isWindows) {
-      try {
-        final result = await _platformChannel.invokeMethod<int>(
-          'getClipboardSequence',
-        );
-        return result ?? -1;
-      } on Exception catch (e) {
-        throw Exception('无法获取 Windows 剪贴板序列号: $e');
-      }
-    } else if (Platform.isLinux) {
-      try {
-        final result = await _platformChannel.invokeMethod<int>(
-          'getClipboardSequence',
-        );
-        return result ?? -1;
-      } on Exception catch (e) {
-        throw Exception('无法获取 Linux 剪贴板序列号: $e');
-      }
-    } else {
-      throw Exception('不支持的平台');
     }
+
+    throw Exception('不支持的平台');
   }
 
-  /// 回退到内容比较检查
   String? _lastClipboardContent;
 
   Future<bool> _fallbackContentCheck() async {
@@ -303,146 +310,69 @@ class ClipboardPoller {
     }
   }
 
-  /// 记录剪贴板变化（增强版本）
-  void _recordChange() {
-    final now = DateTime.now();
+  void _recordChange([DateTime? timestamp]) {
+    final now = timestamp ?? DateTime.now();
     _recentChanges
       ..add(now)
-      // 保持最近的变化记录在指定窗口内
       ..removeWhere(
-        (change) => now.difference(change).inSeconds > _recentChangeWindow,
+        (change) => now.difference(change).inSeconds > 8,
       );
 
     _consecutiveNoChangeCount = 0;
-
-    // 检测快速复制模式
+    _isIdleMode = false;
+    _lastChangeTime = now;
     _detectRapidCopyMode(now);
   }
 
-  /// 检测快速复制模式
+  void _recordNoChange() {
+    _consecutiveNoChangeCount++;
+    _isIdleMode = _consecutiveNoChangeCount >= _idleThreshold;
+  }
+
   void _detectRapidCopyMode(DateTime now) {
-    // 如果有上次的快速复制时间，检查间隔
-    if (_lastRapidCopyTime != null) {
-      final timeSinceLastCopy = now.difference(_lastRapidCopyTime!);
-
-      // 如果间隔小于1秒，认为是快速复制
-      if (timeSinceLastCopy.inMilliseconds < 1000) {
-        _rapidCopyCount++;
-
-        // 达到快速复制阈值，进入快速复制模式
-        if (_rapidCopyCount >= _rapidCopyThreshold) {
-          _isRapidCopyMode = true;
-          _lastRapidCopyTime = now;
-
-          // 设置快速复制模式的超时（5秒后自动退出）
-          _debounceTimer?.cancel();
-          _debounceTimer = Timer(const Duration(seconds: 5), () {
-            _isRapidCopyMode = false;
-            _rapidCopyCount = 0;
-          });
-
-          return;
-        }
-      } else {
-        // 间隔太长，重置快速复制计数
-        _rapidCopyCount = 0;
+    if (_lastRapidCopyTime != null &&
+        now.difference(_lastRapidCopyTime!) <= _rapidCopyWindow) {
+      _rapidCopyCount++;
+      if (_rapidCopyCount >= _rapidCopyThreshold) {
+        _isRapidCopyMode = true;
+        _debounceTimer?.cancel();
+        _debounceTimer = Timer(_rapidCopyTimeout, () {
+          _isRapidCopyMode = false;
+          _rapidCopyCount = 0;
+        });
       }
+    } else {
+      _rapidCopyCount = 1;
     }
 
     _lastRapidCopyTime = now;
   }
 
-  /// 调整轮询间隔（增强版本）
-  void _adjustPollingInterval(bool hasChanged) {
-    if (hasChanged) {
-      // 检测到变化，加快轮询
-      _currentInterval = Duration(
-        milliseconds: (_currentInterval.inMilliseconds * _speedUpFactor)
-            .round(),
-      );
-      _consecutiveNoChangeCount = 0;
-      _lastChangeTime = DateTime.now();
-      _isIdleMode = false; // 退出空闲模式
-
-      // 在快速复制模式下，确保使用最小间隔
-      if (_isRapidCopyMode) {
-        _currentInterval = _minInterval;
-      }
-    } else {
-      // 没有变化，增加计数
-      _consecutiveNoChangeCount++;
-
-      // 在快速复制模式下，更宽容地保持快速轮询
-      if (_isRapidCopyMode) {
-        // 快速复制模式下，即使没有变化也保持较快轮询
-        if (_consecutiveNoChangeCount > _consecutiveNoChangeThreshold * 2) {
-          _currentInterval = Duration(
-            milliseconds: (_currentInterval.inMilliseconds * 1.1).round(),
-          );
-        }
-      } else {
-        // 正常模式下的调整
-        if (_consecutiveNoChangeCount >= _consecutiveNoChangeThreshold) {
-          _currentInterval = Duration(
-            milliseconds: (_currentInterval.inMilliseconds * _slowDownFactor)
-                .round(),
-          );
-        }
-      }
-    }
-
-    // 限制间隔范围
-    if (_currentInterval < _minInterval) {
-      _currentInterval = _minInterval;
-    } else if (_currentInterval > _maxInterval) {
-      _currentInterval = _maxInterval;
-    }
-
-    // 根据最近的活动频率进一步调整
-    _adjustByRecentActivity();
+  void _resetRuntimeState() {
+    _currentInterval = Duration.zero;
+    _lastClipboardSequence = -1;
+    _lastClipboardContent = null;
+    _consecutiveNoChangeCount = 0;
+    _recentChanges.clear();
+    _isIdleMode = false;
+    _isRapidCopyMode = false;
+    _isUsingFallbackPolling = false;
+    _lastRapidCopyTime = null;
+    _rapidCopyCount = 0;
+    _debounceTimer?.cancel();
+    _debounceTimer = null;
   }
 
-  /// 根据最近活动频率调整间隔（优化版本）
-  void _adjustByRecentActivity() {
-    final now = DateTime.now();
-
-    // 清理过期的活动记录
-    _recentChanges.removeWhere(
-      (time) => now.difference(time).inMinutes > _recentChangeWindow,
-    );
-
-    if (_recentChanges.length >= 3) {
-      // 最近活动频繁，使用较短间隔
-      _currentInterval = Duration(
-        milliseconds: (_currentInterval.inMilliseconds * 0.7).round(),
-      );
-    } else if (_recentChanges.isEmpty && _consecutiveNoChangeCount > 20) {
-      // 长时间无活动，使用较长间隔
-      _currentInterval = Duration(
-        milliseconds: (_currentInterval.inMilliseconds * 1.5).round(),
-      );
-    }
-
-    // 再次限制范围
-    if (_currentInterval < _minInterval) {
-      _currentInterval = _minInterval;
-    } else if (_currentInterval > _maxInterval) {
-      _currentInterval = _maxInterval;
-    }
-  }
-
-  /// 获取轮询统计信息（增强版本）
+  /// 获取监听统计信息。
   Map<String, dynamic> getPollingStats() {
     final now = DateTime.now();
-    final currentSessionTime = _pollingStartTime != null
-        ? now.difference(_pollingStartTime!)
+    final currentSessionTime = _monitoringStartTime != null
+        ? now.difference(_monitoringStartTime!)
         : Duration.zero;
-    final totalTime = _totalPollingTime + currentSessionTime;
-
+    final totalTime = _totalMonitoringTime + currentSessionTime;
     final successRate = _totalChecks > 0
         ? _successfulChecks / _totalChecks
         : 0.0;
-
     final avgInterval = _totalChecks > 0 && totalTime.inMilliseconds > 0
         ? totalTime.inMilliseconds / _totalChecks
         : _currentInterval.inMilliseconds.toDouble();
@@ -452,12 +382,17 @@ class ClipboardPoller {
       'isPaused': _isPaused,
       'isIdleMode': _isIdleMode,
       'isRapidCopyMode': _isRapidCopyMode,
+      'isUsingFallbackPolling': _isUsingFallbackPolling,
+      'monitoringMode': _isUsingFallbackPolling
+          ? 'fallback_polling'
+          : (_eventsSubscription != null ? 'native_events' : 'stopped'),
       'currentInterval': _currentInterval.inMilliseconds,
       'consecutiveNoChangeCount': _consecutiveNoChangeCount,
       'recentChangesCount': _recentChanges.length,
       'totalChecks': _totalChecks,
       'successfulChecks': _successfulChecks,
       'failedChecks': _failedChecks,
+      'totalNativeEvents': _totalNativeEvents,
       'successRate': (successRate * 100).toStringAsFixed(1),
       'totalPollingTime': totalTime.inSeconds,
       'averageInterval': avgInterval.toStringAsFixed(1),
@@ -465,32 +400,32 @@ class ClipboardPoller {
       'rapidCopyCount': _rapidCopyCount,
       'lastRapidCopyTime': _lastRapidCopyTime?.toIso8601String(),
       'performance': {
-        'adaptiveScheduling': true,
-        'idleModeEnabled': true,
-        'smartIntervalAdjustment': true,
+        'nativeEventMonitoring': !_isUsingFallbackPolling,
+        'fallbackPollingEnabled': true,
         'rapidCopyDetection': true,
       },
     };
   }
 
-  /// 获取性能指标
+  /// 获取性能指标。
   Map<String, dynamic> getPerformanceMetrics() {
     return {
       'pollingEfficiency': getPollingStats(),
       'resourceOptimization': {
         'idleDetection': _isIdleMode,
-        'adaptiveInterval': _currentInterval != _defaultInterval,
-        'timeBasedAdjustment': true,
+        'fallbackActive': _isUsingFallbackPolling,
+        'nativeEventsReceived': _totalNativeEvents,
       },
     };
   }
 
-  /// 重置统计信息
+  /// 重置统计信息。
   void resetStats() {
     _totalChecks = 0;
     _successfulChecks = 0;
     _failedChecks = 0;
-    _totalPollingTime = Duration.zero;
+    _totalNativeEvents = 0;
+    _totalMonitoringTime = Duration.zero;
     _lastChangeTime = null;
   }
 }

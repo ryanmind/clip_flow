@@ -27,19 +27,161 @@ void ClipboardPlugin::RegisterWithRegistrar(
           registrar->messenger(), "clipboard_service",
           &flutter::StandardMethodCodec::GetInstance());
 
-  auto plugin = std::make_unique<ClipboardPlugin>();
+  auto plugin = std::make_unique<ClipboardPlugin>(registrar);
+
+  plugin->event_channel_ =
+      std::make_unique<flutter::EventChannel<flutter::EncodableValue>>(
+          registrar->messenger(), "clipboard_events",
+          &flutter::StandardMethodCodec::GetInstance());
 
   channel->SetMethodCallHandler(
       [plugin_pointer = plugin.get()](const auto& call, auto result) {
         plugin_pointer->HandleMethodCall(call, std::move(result));
       });
 
+  plugin->event_channel_->SetStreamHandler(std::make_unique<
+      flutter::StreamHandlerFunctions<flutter::EncodableValue>>(
+      [plugin_pointer = plugin.get()](
+          const flutter::EncodableValue* arguments,
+          std::unique_ptr<flutter::EventSink<flutter::EncodableValue>>&& events) {
+        return plugin_pointer->OnListen(arguments, std::move(events));
+      },
+      [plugin_pointer = plugin.get()](const flutter::EncodableValue* arguments) {
+        return plugin_pointer->OnCancel(arguments);
+      }));
+
   registrar->AddPlugin(std::move(plugin));
 }
 
-ClipboardPlugin::ClipboardPlugin() {}
+ClipboardPlugin::ClipboardPlugin(flutter::PluginRegistrarWindows* registrar)
+    : registrar_(registrar) {}
 
-ClipboardPlugin::~ClipboardPlugin() {}
+ClipboardPlugin::~ClipboardPlugin() {
+  StopClipboardMonitoring();
+}
+
+std::unique_ptr<flutter::StreamHandlerError<flutter::EncodableValue>>
+ClipboardPlugin::OnListen(
+    const flutter::EncodableValue* arguments,
+    std::unique_ptr<flutter::EventSink<flutter::EncodableValue>>&& events) {
+  (void)arguments;
+  event_sink_ = std::move(events);
+
+  if (!StartClipboardMonitoring()) {
+    event_sink_.reset();
+    return std::make_unique<flutter::StreamHandlerError<flutter::EncodableValue>>(
+        "clipboard_monitor_error",
+        "Failed to start clipboard monitoring on Windows",
+        nullptr);
+  }
+
+  return nullptr;
+}
+
+std::unique_ptr<flutter::StreamHandlerError<flutter::EncodableValue>>
+ClipboardPlugin::OnCancel(const flutter::EncodableValue* arguments) {
+  (void)arguments;
+  StopClipboardMonitoring();
+  event_sink_.reset();
+  return nullptr;
+}
+
+bool ClipboardPlugin::StartClipboardMonitoring() {
+  if (is_monitoring_) {
+    return true;
+  }
+
+  auto* view = registrar_ != nullptr ? registrar_->GetView() : nullptr;
+  if (view == nullptr) {
+    return false;
+  }
+
+  window_handle_ = view->GetNativeWindow();
+  if (window_handle_ == nullptr) {
+    return false;
+  }
+
+  if (window_proc_delegate_id_ == 0) {
+    window_proc_delegate_id_ = registrar_->RegisterTopLevelWindowProcDelegate(
+        [this](HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
+          return HandleWindowProc(hwnd, message, wparam, lparam);
+        });
+  }
+
+  if (!AddClipboardFormatListener(window_handle_)) {
+    if (window_proc_delegate_id_ != 0) {
+      registrar_->UnregisterTopLevelWindowProcDelegate(window_proc_delegate_id_);
+      window_proc_delegate_id_ = 0;
+    }
+    window_handle_ = nullptr;
+    return false;
+  }
+
+  last_emitted_sequence_ = GetClipboardSequenceNumber();
+  is_monitoring_ = true;
+  return true;
+}
+
+void ClipboardPlugin::StopClipboardMonitoring() {
+  if (window_handle_ != nullptr) {
+    RemoveClipboardFormatListener(window_handle_);
+    window_handle_ = nullptr;
+  }
+
+  if (window_proc_delegate_id_ != 0 && registrar_ != nullptr) {
+    registrar_->UnregisterTopLevelWindowProcDelegate(window_proc_delegate_id_);
+    window_proc_delegate_id_ = 0;
+  }
+
+  is_monitoring_ = false;
+}
+
+std::optional<LRESULT> ClipboardPlugin::HandleWindowProc(HWND hwnd,
+                                                         UINT message,
+                                                         WPARAM wparam,
+                                                         LPARAM lparam) {
+  (void)hwnd;
+  (void)wparam;
+  (void)lparam;
+
+  if (!is_monitoring_ || event_sink_ == nullptr) {
+    return std::nullopt;
+  }
+
+  if (message == WM_CLIPBOARDUPDATE) {
+    const DWORD sequence = GetClipboardSequenceNumber();
+    if (sequence != last_emitted_sequence_) {
+      EmitClipboardEvent(sequence);
+    }
+  }
+
+  return std::nullopt;
+}
+
+void ClipboardPlugin::EmitClipboardEvent(DWORD sequence) {
+  if (event_sink_ == nullptr) {
+    return;
+  }
+
+  last_emitted_sequence_ = sequence;
+  const auto now = std::chrono::system_clock::now();
+  const auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+      now.time_since_epoch()).count();
+
+  flutter::EncodableMap event;
+  event[flutter::EncodableValue("sequence")] =
+      flutter::EncodableValue(static_cast<int64_t>(sequence));
+  event[flutter::EncodableValue("timestamp")] =
+      flutter::EncodableValue(static_cast<int64_t>(timestamp));
+  event[flutter::EncodableValue("platform")] =
+      flutter::EncodableValue("windows");
+  event[flutter::EncodableValue("source")] =
+      flutter::EncodableValue("wm_clipboardupdate");
+  event[flutter::EncodableValue("monitoringIntervalMs")] =
+      flutter::EncodableValue(0);
+
+  event_sink_->Success(flutter::EncodableValue(event));
+}
 
 void ClipboardPlugin::HandleMethodCall(
     const flutter::MethodCall<flutter::EncodableValue>& method_call,

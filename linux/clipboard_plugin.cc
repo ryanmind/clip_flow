@@ -20,14 +20,25 @@
 struct _ClipboardPlugin {
   GObject parent_instance;
   GtkClipboard* clipboard;
+  FlEventChannel* event_channel;
   gulong owner_change_handler_id;
   gint64 clipboard_sequence;
+  gboolean is_listening;
 };
 
 G_DEFINE_TYPE(ClipboardPlugin, clipboard_plugin, g_object_get_type())
 
 // Forward declarations
 static void get_clipboard_formats(FlMethodCall* method_call);
+static FlMethodErrorResponse* clipboard_events_listen_cb(
+    FlEventChannel* channel,
+    FlValue* args,
+    gpointer user_data);
+static FlMethodErrorResponse* clipboard_events_cancel_cb(
+    FlEventChannel* channel,
+    FlValue* args,
+    gpointer user_data);
+static void send_clipboard_event(ClipboardPlugin* plugin);
 static void clipboard_owner_change_cb(GtkClipboard* clipboard,
                                       GdkEvent* event,
                                       gpointer user_data);
@@ -45,6 +56,10 @@ static void clipboard_plugin_dispose(GObject* object) {
     g_object_unref(self->clipboard);
     self->clipboard = nullptr;
   }
+  if (self->event_channel != nullptr) {
+    g_object_unref(self->event_channel);
+    self->event_channel = nullptr;
+  }
   G_OBJECT_CLASS(clipboard_plugin_parent_class)->dispose(object);
 }
 
@@ -54,8 +69,10 @@ static void clipboard_plugin_class_init(ClipboardPluginClass* klass) {
 
 static void clipboard_plugin_init(ClipboardPlugin* self) {
   self->clipboard = nullptr;
+  self->event_channel = nullptr;
   self->owner_change_handler_id = 0;
   self->clipboard_sequence = 0;
+  self->is_listening = FALSE;
 }
 
 static void method_call_cb(FlMethodChannel* channel, FlMethodCall* method_call,
@@ -77,6 +94,17 @@ void clipboard_plugin_register_with_registrar(FlPluginRegistrar* registrar) {
                                             g_object_ref(plugin),
                                             g_object_unref);
 
+  g_autoptr(FlStandardMethodCodec) event_codec = fl_standard_method_codec_new();
+  plugin->event_channel = fl_event_channel_new(
+      fl_plugin_registrar_get_messenger(registrar),
+      "clipboard_events",
+      FL_METHOD_CODEC(event_codec));
+  fl_event_channel_set_stream_handlers(plugin->event_channel,
+                                       clipboard_events_listen_cb,
+                                       clipboard_events_cancel_cb,
+                                       plugin,
+                                       nullptr);
+
   plugin->clipboard = gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
   if (plugin->clipboard != nullptr) {
     g_object_ref(plugin->clipboard);
@@ -97,6 +125,61 @@ static void clipboard_owner_change_cb(GtkClipboard* clipboard,
   (void)event;
   ClipboardPlugin* plugin = CLIPBOARD_PLUGIN(user_data);
   plugin->clipboard_sequence++;
+  if (plugin->is_listening) {
+    send_clipboard_event(plugin);
+  }
+}
+
+static FlMethodErrorResponse* clipboard_events_listen_cb(
+    FlEventChannel* channel,
+    FlValue* args,
+    gpointer user_data) {
+  (void)channel;
+  (void)args;
+  ClipboardPlugin* plugin = CLIPBOARD_PLUGIN(user_data);
+  plugin->is_listening = TRUE;
+  return nullptr;
+}
+
+static FlMethodErrorResponse* clipboard_events_cancel_cb(
+    FlEventChannel* channel,
+    FlValue* args,
+    gpointer user_data) {
+  (void)channel;
+  (void)args;
+  ClipboardPlugin* plugin = CLIPBOARD_PLUGIN(user_data);
+  plugin->is_listening = FALSE;
+  return nullptr;
+}
+
+static void send_clipboard_event(ClipboardPlugin* plugin) {
+  if (plugin->event_channel == nullptr) {
+    return;
+  }
+
+  g_autoptr(FlValue) event = fl_value_new_map();
+  fl_value_set_string_take(
+      event,
+      "sequence",
+      fl_value_new_int(plugin->clipboard_sequence));
+  fl_value_set_string_take(
+      event,
+      "timestamp",
+      fl_value_new_int(g_get_real_time() / 1000));
+  fl_value_set_string_take(
+      event,
+      "platform",
+      fl_value_new_string("linux"));
+  fl_value_set_string_take(
+      event,
+      "source",
+      fl_value_new_string("owner-change"));
+  fl_value_set_string_take(
+      event,
+      "monitoringIntervalMs",
+      fl_value_new_int(0));
+
+  fl_event_channel_send(plugin->event_channel, event, nullptr, nullptr);
 }
 
 // Helper functions

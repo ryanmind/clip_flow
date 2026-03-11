@@ -5,7 +5,7 @@ import ServiceManagement
 import UniformTypeIdentifiers
 import Vision
 
-@objc class ClipboardPlugin: NSObject, FlutterPlugin {
+@objc class ClipboardPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     // 全局事件监听器
     private var globalEventMonitor: Any?
 
@@ -41,6 +41,8 @@ import Vision
 
     // Flutter方法通道
     private var channel: FlutterMethodChannel?
+    private var eventChannel: FlutterEventChannel?
+    private var eventSink: FlutterEventSink?
 
     // Security-Scoped Bookmarks 访问缓存
     private var accessingBookmarks: [String: URL] = [:]
@@ -54,13 +56,24 @@ import Vision
     private var lastClipboardType: [String: Any]?
     private var lastTypeCheckTime: Date = Date.distantPast
     private var lastTypeSequence: Int = -1
+    private var clipboardWatcherTimer: Timer?
+    private let clipboardWatcherInterval: TimeInterval = 0.25
+    private var lastEmittedClipboardSequence: Int = -1
 
     static func register(with registrar: FlutterPluginRegistrar) {
         let channel = FlutterMethodChannel(
             name: "clipboard_service", binaryMessenger: registrar.messenger)
+        let eventChannel = FlutterEventChannel(
+            name: "clipboard_events", binaryMessenger: registrar.messenger)
         let instance = ClipboardPlugin()
         instance.channel = channel
+        instance.eventChannel = eventChannel
         registrar.addMethodCallDelegate(instance, channel: channel)
+        eventChannel.setStreamHandler(instance)
+    }
+
+    deinit {
+        stopClipboardWatcher()
     }
 
     func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
@@ -128,6 +141,68 @@ import Vision
         default:
             result(FlutterMethodNotImplemented)
         }
+    }
+
+    func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink)
+        -> FlutterError?
+    {
+        eventSink = events
+        startClipboardWatcher()
+        return nil
+    }
+
+    func onCancel(withArguments arguments: Any?) -> FlutterError? {
+        stopClipboardWatcher()
+        eventSink = nil
+        return nil
+    }
+
+    private func startClipboardWatcher() {
+        stopClipboardWatcher()
+
+        let currentSequence = NSPasteboard.general.changeCount
+        lastClipboardSequence = currentSequence
+        lastEmittedClipboardSequence = currentSequence
+        lastSequenceCheckTime = Date()
+
+        clipboardWatcherTimer = Timer.scheduledTimer(withTimeInterval: clipboardWatcherInterval, repeats: true) {
+            [weak self] _ in
+            self?.emitClipboardEventIfNeeded()
+        }
+
+        if let clipboardWatcherTimer {
+            RunLoop.main.add(clipboardWatcherTimer, forMode: .common)
+        }
+    }
+
+    private func stopClipboardWatcher() {
+        clipboardWatcherTimer?.invalidate()
+        clipboardWatcherTimer = nil
+        lastEmittedClipboardSequence = NSPasteboard.general.changeCount
+    }
+
+    private func emitClipboardEventIfNeeded() {
+        guard let eventSink else { return }
+
+        let now = Date()
+        let currentSequence = NSPasteboard.general.changeCount
+        guard currentSequence != lastEmittedClipboardSequence else { return }
+
+        lastEmittedClipboardSequence = currentSequence
+        lastClipboardSequence = currentSequence
+        lastSequenceCheckTime = now
+
+        eventSink(buildClipboardEvent(sequence: currentSequence, timestamp: now))
+    }
+
+    private func buildClipboardEvent(sequence: Int, timestamp: Date) -> [String: Any] {
+        [
+            "sequence": sequence,
+            "timestamp": Int(timestamp.timeIntervalSince1970 * 1000),
+            "platform": "macos",
+            "source": "watcher",
+            "monitoringIntervalMs": Int(clipboardWatcherInterval * 1000)
+        ]
     }
 
     private func getClipboardFormats(result: @escaping FlutterResult) {
