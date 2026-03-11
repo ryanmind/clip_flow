@@ -19,24 +19,24 @@ class SqlInputValidator {
 
   /// 危险的 SQL 字符模式
   static const List<String> dangerousPatterns = [
-    ";--",
-    "/*",
-    "*/",
-    "xp_",
-    "exec(",
-    "execute(",
-    "script:",
-    "javascript:",
-    "union.*select",
-    "drop.*table",
-    "delete.*from",
-    "insert.*into",
-    "update.*set",
+    ';--',
+    '/*',
+    '*/',
+    'xp_',
+    'exec(',
+    'execute(',
+    'script:',
+    'javascript:',
+    'union.*select',
+    'drop.*table',
+    'delete.*from',
+    'insert.*into',
+    'update.*set',
     "'or'1'='1",
     "' or 1=1",
-    "--",
-    "/*",
-    "*/",
+    '--',
+    '/*',
+    '*/',
   ];
 
   /// 验证并清理搜索查询
@@ -740,7 +740,11 @@ class DatabaseService {
         metadata LIKE ? OR
         ocr_text LIKE ?
       ''',
-      whereArgs: ['%$sanitizedQuery%', '%$sanitizedQuery%', '%$sanitizedQuery%'],
+      whereArgs: [
+        '%$sanitizedQuery%',
+        '%$sanitizedQuery%',
+        '%$sanitizedQuery%',
+      ],
       orderBy: 'created_at DESC',
       limit: limit,
       offset: offset,
@@ -801,7 +805,11 @@ class DatabaseService {
       metadata LIKE ? OR
       ocr_text LIKE ?
     ''';
-    final whereArgs = ['%$sanitizedQuery%', '%$sanitizedQuery%', '%$sanitizedQuery%'];
+    final whereArgs = [
+      '%$sanitizedQuery%',
+      '%$sanitizedQuery%',
+      '%$sanitizedQuery%',
+    ];
 
     // 如果指定了类型，添加类型过滤
     if (type != null) {
@@ -829,7 +837,9 @@ class DatabaseService {
         'resultCount': results.length,
         'hasOcrMatches': results.any(
           (item) =>
-              item.ocrText?.toLowerCase().contains(sanitizedQuery.toLowerCase()) ??
+              item.ocrText?.toLowerCase().contains(
+                sanitizedQuery.toLowerCase(),
+              ) ??
               false,
         ),
       },
@@ -1020,8 +1030,10 @@ class DatabaseService {
       thumbnail: thumbRaw is List<int>
           ? Uint8List.fromList(thumbRaw)
           : (thumbRaw is Uint8List
-              ? thumbRaw
-              : (thumbRaw is List ? Uint8List.fromList(List<int>.from(thumbRaw)) : null)),
+                ? thumbRaw
+                : (thumbRaw is List
+                      ? Uint8List.fromList(List<int>.from(thumbRaw))
+                      : null)),
       metadata: metadata,
       ocrText: ocrTextRaw is String ? ocrTextRaw : null,
       ocrTextId: ocrTextIdRaw is String ? ocrTextIdRaw : null,
@@ -1145,8 +1157,7 @@ class DatabaseService {
     if (!_isInitialized) await initialize();
     if (_database == null) throw Exception('Database not initialized');
 
-    final supportDirectory = await PathService.instance
-        .getDocumentsDirectory();
+    final supportDirectory = await PathService.instance.getDocumentsDirectory();
     final mediaRoot = Directory(join(supportDirectory.path, 'media'));
     if (!mediaRoot.existsSync()) return 0;
 
@@ -1601,7 +1612,8 @@ class DatabaseService {
         return report;
       }
 
-      final supportDir = await PathService.instance.getApplicationSupportDirectory();
+      final supportDir = await PathService.instance
+          .getApplicationSupportDirectory();
       final itemsToUpdate = <Map<String, dynamic>>[];
       final itemsToDelete = <String>[];
 

@@ -1,11 +1,15 @@
 import 'dart:io';
+
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart' as path_provider;
 
 /// 路径遍历安全异常
 class PathTraversalException implements Exception {
-  final String message;
+  /// 创建路径遍历异常。
   PathTraversalException(this.message);
+
+  /// 异常描述信息。
+  final String message;
 
   @override
   String toString() => 'PathTraversalException: $message';
@@ -34,7 +38,8 @@ class PathService {
   ///
   /// 首次调用时会触发权限请求，后续调用使用缓存
   Future<Directory> getDocumentsDirectory() async {
-    _documentsDirectory ??= await path_provider.getApplicationDocumentsDirectory();
+    _documentsDirectory ??= await path_provider
+        .getApplicationDocumentsDirectory();
     return _documentsDirectory!;
   }
 
@@ -46,7 +51,8 @@ class PathService {
 
   /// 获取应用支持目录
   Future<Directory> getApplicationSupportDirectory() async {
-    _applicationSupportDirectory ??= await path_provider.getApplicationSupportDirectory();
+    _applicationSupportDirectory ??= await path_provider
+        .getApplicationSupportDirectory();
     return _applicationSupportDirectory!;
   }
 
@@ -143,7 +149,7 @@ class PathService {
     final normalized = p.normalize(path);
 
     // 检查是否包含可疑的路径遍历模式
-    if (path.contains('../') || path.contains('..\\')) {
+    if (RegExp(r'\.\.[/\\]').hasMatch(path)) {
       throw PathTraversalException(
         '路径包含父目录引用: $path',
       );
