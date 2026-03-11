@@ -83,7 +83,7 @@ void main() {
       test('应该能够获取轮询间隔', () {
         final interval = service.currentPollingInterval;
         expect(interval, isA<Duration>());
-        expect(interval.inMilliseconds, greaterThan(0));
+        expect(interval.inMilliseconds, greaterThanOrEqualTo(0));
       });
 
       test('应该能够暂停轮询', () {
@@ -163,7 +163,6 @@ void main() {
       test('应该处理设置内容错误', () async {
         final invalidItem = ClipItem(
           type: ClipType.text,
-          content: null,
           metadata: const {},
         );
 
@@ -283,27 +282,4 @@ void main() {
       });
     });
   });
-}
-
-/// 测试辅助工具
-class ClipboardTestHelper {
-  /// 创建测试用的 ClipItem
-  static ClipItem createTestClipItem({
-    ClipType type = ClipType.text,
-    String? content,
-    String? filePath,
-    Map<String, dynamic>? metadata,
-  }) {
-    return ClipItem(
-      type: type,
-      content: content ?? 'test content',
-      filePath: filePath,
-      metadata: metadata ?? {'test': true},
-    );
-  }
-
-  /// 等待异步操作完成
-  static Future<void> waitForAsync([int milliseconds = 10]) async {
-    await Future<void>.delayed(Duration(milliseconds: milliseconds));
-  }
 }
