@@ -19,17 +19,32 @@
 
 struct _ClipboardPlugin {
   GObject parent_instance;
+  GtkClipboard* clipboard;
+  gulong owner_change_handler_id;
+  gint64 clipboard_sequence;
 };
 
 G_DEFINE_TYPE(ClipboardPlugin, clipboard_plugin, g_object_get_type())
 
 // Forward declarations
 static void get_clipboard_formats(FlMethodCall* method_call);
+static void clipboard_owner_change_cb(GtkClipboard* clipboard,
+                                      GdkEvent* event,
+                                      gpointer user_data);
 static void clipboard_plugin_handle_method_call(
     ClipboardPlugin* self,
     FlMethodCall* method_call);
 
 static void clipboard_plugin_dispose(GObject* object) {
+  ClipboardPlugin* self = CLIPBOARD_PLUGIN(object);
+  if (self->clipboard != nullptr) {
+    if (self->owner_change_handler_id != 0) {
+      g_signal_handler_disconnect(self->clipboard, self->owner_change_handler_id);
+      self->owner_change_handler_id = 0;
+    }
+    g_object_unref(self->clipboard);
+    self->clipboard = nullptr;
+  }
   G_OBJECT_CLASS(clipboard_plugin_parent_class)->dispose(object);
 }
 
@@ -37,7 +52,11 @@ static void clipboard_plugin_class_init(ClipboardPluginClass* klass) {
   G_OBJECT_CLASS(klass)->dispose = clipboard_plugin_dispose;
 }
 
-static void clipboard_plugin_init(ClipboardPlugin* self) {}
+static void clipboard_plugin_init(ClipboardPlugin* self) {
+  self->clipboard = nullptr;
+  self->owner_change_handler_id = 0;
+  self->clipboard_sequence = 0;
+}
 
 static void method_call_cb(FlMethodChannel* channel, FlMethodCall* method_call,
                           gpointer user_data) {
@@ -58,7 +77,26 @@ void clipboard_plugin_register_with_registrar(FlPluginRegistrar* registrar) {
                                             g_object_ref(plugin),
                                             g_object_unref);
 
+  plugin->clipboard = gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
+  if (plugin->clipboard != nullptr) {
+    g_object_ref(plugin->clipboard);
+    plugin->owner_change_handler_id = g_signal_connect(
+        plugin->clipboard,
+        "owner-change",
+        G_CALLBACK(clipboard_owner_change_cb),
+        plugin);
+  }
+
   g_object_unref(plugin);
+}
+
+static void clipboard_owner_change_cb(GtkClipboard* clipboard,
+                                      GdkEvent* event,
+                                      gpointer user_data) {
+  (void)clipboard;
+  (void)event;
+  ClipboardPlugin* plugin = CLIPBOARD_PLUGIN(user_data);
+  plugin->clipboard_sequence++;
 }
 
 // Helper functions
@@ -295,12 +333,9 @@ static void get_clipboard_type(FlMethodCall* method_call) {
   fl_method_call_respond_success(method_call, result_map, nullptr);
 }
 
-static void get_clipboard_sequence(FlMethodCall* method_call) {
-  // Linux 没有直接的序列号概念，使用时间戳作为替代
-  static gint64 last_sequence = 0;
-  last_sequence++;
-  
-  g_autoptr(FlValue) result = fl_value_new_int(last_sequence);
+static void get_clipboard_sequence(ClipboardPlugin* self,
+                                   FlMethodCall* method_call) {
+  g_autoptr(FlValue) result = fl_value_new_int(self->clipboard_sequence);
   fl_method_call_respond_success(method_call, result, nullptr);
 }
 
@@ -606,7 +641,7 @@ static void clipboard_plugin_handle_method_call(
   } else if (strcmp(method, "getClipboardType") == 0) {
     get_clipboard_type(method_call);
   } else if (strcmp(method, "getClipboardSequence") == 0) {
-    get_clipboard_sequence(method_call);
+    get_clipboard_sequence(self, method_call);
   } else if (strcmp(method, "getClipboardFilePaths") == 0) {
     get_clipboard_file_paths(method_call);
   } else if (strcmp(method, "getClipboardImageData") == 0) {
